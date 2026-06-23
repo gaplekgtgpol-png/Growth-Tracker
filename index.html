@@ -811,27 +811,91 @@
 // ============================================================
  
 // --- KONFIGURASI GAS ---
-// Ganti dengan URL deployment GAS Anda setelah deploy
-const GAS_URL = https://script.google.com/macros/s/AKfycbx_XaTViTE4YKvDlUOYx54KofpzK4y6VAv44SLPjA0ivahHFcLAefvckaBMTu_lcy1NxA/exec;
-// Contoh: 'https://script.google.com/macros/s/AKfycb.../exec'
+// --- KONFIGURASI GAS ---
+const GAS_URL =
+'https://script.google.com/macros/s/AKfycbx_XaTViTE4YKvDlUOYx54KofpzK4y6VAv44SLPjA0ivahHFcLAefvckaBMTu_lcy1NxA/exec';
+
+let isSyncing = false;
 
 async function initCloudSync() {
-  if (!GAS_URL || GAS_URL.includes('GANTI_DENGAN')) return;
- 
-  const localEmpty = childrenData.length === 0;
- 
-  if (localEmpty) {
-    // Device baru / localStorage bersih → wajib load dari cloud
-    showCloudLoadingOverlay(true);
-    await loadFromGAS();
-    showCloudLoadingOverlay(false);
-  } else {
-    // Ada data lokal → tetap sync diam-diam di background
-    // untuk memastikan data terbaru dari device lain ikut masuk
-    syncFromGASBackground();
-  }
+
+    if (!GAS_URL) return;
+
+    const localEmpty = childrenData.length === 0;
+
+    if (localEmpty) {
+
+        showCloudLoadingOverlay(true);
+
+        await loadFromGAS();
+
+        showCloudLoadingOverlay(false);
+
+    } else {
+
+        syncFromGASBackground();
+
+    }
+
 }
 
+async function loadFromGAS() {
+
+    updateSyncStatus('syncing');
+
+    try {
+
+        const url =
+            GAS_URL +
+            '?action=load_all&t=' +
+            Date.now();
+
+        const response = await fetch(url);
+
+        const result = await response.json();
+
+        if (
+            result.status === 'ok' &&
+            Array.isArray(result.data)
+        ) {
+
+            if (result.data.length > 0) {
+
+                childrenData = result.data;
+
+                activeChildId =
+                    activeChildId ||
+                    childrenData[0].id;
+
+                localStorage.setItem(
+                    'gt_children',
+                    JSON.stringify(childrenData)
+                );
+
+                localStorage.setItem(
+                    'gt_active_child_id',
+                    activeChildId
+                );
+
+                renderDashboard();
+                updateActiveChildBanner();
+                loadActiveChildData();
+
+                updateSyncStatus('success');
+
+            }
+
+        }
+
+    } catch(err){
+
+        console.error(err);
+
+        updateSyncStatus('error');
+
+    }
+
+}
  
 // ============================================================
 // LOAD DATA DARI GAS (blocking - ditunggu sampai selesai)
@@ -897,14 +961,55 @@ async function syncFromGASBackground() {
       }
  
       // Merge pengukuran: tambah yang belum ada di lokal
-      cloudChild.measurements.forEach(cm => {
-        const exists = localChild.measurements.find(lm => lm.id === cm.id);
-        if (!exists) {
-          localChild.measurements.push(cm);
-          localChild.measurements.sort((a, b) => new Date(a.date) - new Date(b.date));
-          changed = true;
-        }
-      });
+      (cloudChild.measurements || []).forEach(cm => {
+
+    const exists =
+      (localChild.measurements || [])
+      .find(lm => lm.id === cm.id);
+
+    if (!exists) {
+
+        if (!localChild.measurements)
+            localChild.measurements = [];
+
+        localChild.measurements.push(cm);
+
+        localChild.measurements.sort(
+            (a,b)=>
+            new Date(a.date) -
+            new Date(b.date)
+        );
+
+        changed = true;
+    }
+
+});
+
+
+(cloudChild.dailyNotes || []).forEach(cn => {
+
+    const exists =
+      (localChild.dailyNotes || [])
+      .find(ln => ln.id === cn.id);
+
+    if (!exists) {
+
+        if (!localChild.dailyNotes)
+            localChild.dailyNotes = [];
+
+        localChild.dailyNotes.push(cn);
+
+        localChild.dailyNotes.sort(
+            (a,b)=>
+            new Date(b.date) -
+            new Date(a.date)
+        );
+
+        changed = true;
+
+    }
+
+});
  
       // Merge catatan harian: tambah yang belum ada di lokal
       cloudChild.dailyNotes.forEach(cn => {
@@ -1044,7 +1149,83 @@ async function syncToGAS(action = 'sync_all', specificData = null) {
       method: 'POST',
       // GAS tidak support preflight CORS, gunakan no-cors
       // Data tetap terkirim, tapi response tidak bisa dibaca (opaque)
-      mode: 'no-cors',
+      async function syncToGAS(
+    action='sync_all',
+    specificData=null
+){
+
+    if (!GAS_URL) return;
+
+    if (isSyncing) return;
+
+    isSyncing = true;
+
+    updateSyncStatus('syncing');
+
+    try {
+
+        const payload =
+            action === 'sync_all'
+            ? {
+                action:'sync_all',
+                data:childrenData
+              }
+            : {
+                action,
+                data:specificData
+              };
+
+        const response =
+            await fetch(GAS_URL,{
+
+                method:'POST',
+
+                headers:{
+                    'Content-Type':
+                    'application/json'
+                },
+
+                body:
+                JSON.stringify(payload)
+
+            });
+
+        const result =
+            await response.json();
+
+        if(result.status==='ok'){
+
+            updateSyncStatus(
+                'success'
+            );
+
+        } else {
+
+            throw new Error(
+                result.message
+            );
+
+        }
+
+    }
+
+    catch(err){
+
+        console.error(err);
+
+        updateSyncStatus(
+            'error'
+        );
+
+    }
+
+    finally{
+
+        isSyncing=false;
+
+    }
+
+},
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(payload)
     });
